@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "AzureBackup": {
+      "commandName": "Project",
+      "commandLineArgs": "\"E:\\SkyDrive\\Documents\\Visual Studio 2015\\Projects\\Bootstrap\""
+    }
+  }
+}
