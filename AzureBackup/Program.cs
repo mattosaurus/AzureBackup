@@ -85,7 +85,7 @@ namespace AzureBackup
 
             // Initialize serilog logger
             Log.Logger = new LoggerConfiguration()
-                 //.WriteTo.MSSqlServer(configuration.GetConnectionString("LoggingSQLServer"), "logs", schemaName: "pi")
+                 //.WriteTo.MSSqlServer(configuration.GetConnectionString("LoggingSQLServer"), "logs")
                  //.WriteTo.Email(emailConnection, restrictedToMinimumLevel: Serilog.Events.LogEventLevel.Error, mailSubject: "Azure Backup Error")
                  .WriteTo.Console(Serilog.Events.LogEventLevel.Debug)
                  .MinimumLevel.Debug()
