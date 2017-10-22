@@ -1,69 +1,105 @@
-﻿using Microsoft.Extensions.Configuration;
-using Microsoft.WindowsAzure.Storage;
-using Microsoft.WindowsAzure.Storage.Auth;
+﻿using AzureBackup.Extensions;
+using AzureBackup.Services;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.WindowsAzure.Storage.Blob;
+using Serilog;
+using Serilog.Sinks.Email;
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Net;
+using System.Threading.Tasks;
+using System.Threading.Tasks.Dataflow;
 
 namespace AzureBackup
 {
     class Program
     {
+        public static IConfigurationRoot configuration;
+
         static void Main(string[] args)
         {
-            // Configuration
-            var builder = new ConfigurationBuilder()
-                .SetBasePath(Directory.GetCurrentDirectory())
-                .AddJsonFile("appsettings.json", optional: true, reloadOnChange: true);
+            // Start!
+            MainAsync().Wait();
+        }
 
-            IConfigurationRoot configuration = builder.Build();
+        static async Task MainAsync()
+        {
+            // Create service collection
+            ServiceCollection serviceCollection = new ServiceCollection();
+            ConfigureServices(serviceCollection);
 
-            string backupPath = args[0];
+            // Create service provider
+            IServiceProvider serviceProvider = serviceCollection.BuildServiceProvider();
 
-            if (!backupPath.EndsWith("\\"))
-            {
-                backupPath += "\\";
-            }
+            // Get backup sources for client
+            List<String> sources = configuration.GetSection("Backup:Sources").GetChildren().Select(x => x.Value).ToList();
 
-            // Check directory exists
-            if (!Directory.Exists(backupPath))
-            {
-                throw new ArgumentException("Specified directory doesn't exist.");
-            }
+            // Run all tasks
+            //await Task.WhenAll(sources.Select(i => serviceProvider.GetService<App>().Run(i)).ToArray());
 
-            DirectoryInfo directoryInfo = new DirectoryInfo(backupPath);
-
-            string[] filePaths = Directory.GetFiles(backupPath, "*", SearchOption.AllDirectories);
-
-            List<FileInfo> files = filePaths.Select(x => new FileInfo(x)).ToList();
-
-            // Retrieve storage account from connection string.
-            string containerConnectionString = configuration["Azure:ContainerConnectionString"];
-            CloudStorageAccount storageAccount = CloudStorageAccount.Parse(containerConnectionString);
-
-            // Create the blob client.
-            CloudBlobClient blobClient = storageAccount.CreateCloudBlobClient();
-
-            // Retrieve a reference to a container.
-            CloudBlobContainer container = blobClient.GetContainerReference(configuration["Azure:ContainerName"]);
-
-            // Upload files
-            foreach (FileInfo file in files)
-            {
-                string blobPath = file.FullName.Replace(backupPath, "");
-                blobPath = directoryInfo.Name + "\\" + blobPath;
-
-                // Retrieve reference to a blob
-                CloudBlockBlob blockBlob = container.GetBlockBlobReference(file.Name);
-
-                // Create or overwrite the "myblob" blob with contents from a local file.
-                using (FileStream fileStream = File.OpenRead(file.FullName))
+            // Create a block with an asynchronous action
+            var block = new ActionBlock<string>(
+                async x => await serviceProvider.GetService<App>().Run(x),
+                new ExecutionDataflowBlockOptions
                 {
-                    blockBlob.UploadFromStreamAsync(fileStream);
-                }
+                    BoundedCapacity = int.Parse(configuration["Backup:BoundedCapacity"]), // Cap the item count
+                    MaxDegreeOfParallelism = int.Parse(configuration["Backup:MaxDegreeOfParallelism"])
+                    //MaxDegreeOfParallelism = Environment.ProcessorCount, // Parallelize on all cores
+                });
+
+            // Add items to the block and asynchronously wait if BoundedCapacity is reached
+            foreach (string source in sources)
+            {
+                await block.SendAsync(source);
             }
+
+            block.Complete();
+            await block.Completion;
+        }
+
+        private static void ConfigureServices(IServiceCollection serviceCollection)
+        {
+            // Add logging
+            serviceCollection.AddSingleton(new LoggerFactory()
+                .AddConsole()
+                .AddSerilog()
+                .AddDebug());
+            serviceCollection.AddLogging();
+
+            // Build configuration
+            configuration = new ConfigurationBuilder()
+                .SetBasePath(Directory.GetCurrentDirectory())
+                .AddJsonFile("appsettings.json", false)
+                .Build();
+
+            //EmailConnectionInfo emailConnection = new EmailConnectionInfo();
+            //emailConnection.FromEmail = configuration["Email:FromEmail"].ToString();
+            //emailConnection.ToEmail = configuration["Email:ToEmail"].ToString();
+            //emailConnection.MailServer = configuration["Email:MailServer"].ToString();
+            //emailConnection.NetworkCredentials = new NetworkCredential(configuration["Email:UserName"].ToString(), configuration["Email:Password"].ToString());
+            //emailConnection.Port = int.Parse(configuration["Email:Port"]);
+
+            // Initialize serilog logger
+            Log.Logger = new LoggerConfiguration()
+                 //.WriteTo.MSSqlServer(configuration.GetConnectionString("LoggingSQLServer"), "logs", schemaName: "pi")
+                 //.WriteTo.Email(emailConnection, restrictedToMinimumLevel: Serilog.Events.LogEventLevel.Error, mailSubject: "Azure Backup Error")
+                 .WriteTo.Console(Serilog.Events.LogEventLevel.Debug)
+                 .MinimumLevel.Debug()
+                 .Enrich.FromLogContext()
+                 .CreateLogger();
+
+            // Add access to generic IConfigurationRoot
+            serviceCollection.AddSingleton<IConfigurationRoot>(configuration);
+
+            // Add services
+            serviceCollection.AddTransient<IBackupService, BackupService>();
+
+            // Add app
+            serviceCollection.AddTransient<App>();
         }
     }
 }
