@@ -72,7 +72,7 @@ namespace AzureBackup
 
             // Build configuration
             configuration = new ConfigurationBuilder()
-                .SetBasePath(Directory.GetParent(AppContext.BaseDirectory).Parent.Parent.FullName)
+                .SetBasePath(Directory.GetParent(AppContext.BaseDirectory).FullName)
                 .AddJsonFile("appsettings.json", false)
                 .Build();
 
