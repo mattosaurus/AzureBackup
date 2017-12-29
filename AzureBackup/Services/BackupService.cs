@@ -102,7 +102,14 @@ namespace AzureBackup.Services
 
             foreach (FileInfo file in files)
             {
-                await BackupFile(directory, file);
+                try
+                {
+                    await BackupFile(directory, file);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Upload of file failed.");
+                }
             }
         }
     }
