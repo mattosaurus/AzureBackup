@@ -1,32 +1,28 @@
-﻿using AzureBackup.Extensions;
-using AzureBackup.Services;
+﻿using AzureBackup.Services;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using Microsoft.WindowsAzure.Storage.Blob;
 using Serilog;
-using Serilog.Sinks.Email;
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Net;
 using System.Threading.Tasks;
 using System.Threading.Tasks.Dataflow;
 
 namespace AzureBackup
 {
-    class Program
+    internal class Program
     {
         public static IConfigurationRoot configuration;
 
-        static void Main(string[] args)
+        private static void Main(string[] args)
         {
             // Start!
-            MainAsync().Wait();
+            MainAsync((args.Length != 0) ? args[0].Contains("restore") : false).Wait();
         }
 
-        static async Task MainAsync()
+        private static async Task MainAsync(bool restore = false)
         {
             // Create service collection
             ServiceCollection serviceCollection = new ServiceCollection();
@@ -36,14 +32,14 @@ namespace AzureBackup
             IServiceProvider serviceProvider = serviceCollection.BuildServiceProvider();
 
             // Get backup sources for client
-            List<String> sources = configuration.GetSection("Backup:Sources").GetChildren().Select(x => x.Value).ToList();
+            List<string> sources = configuration.GetSection("Backup:Sources").GetChildren().Select(x => x.Value).ToList();
 
             // Run all tasks
             //await Task.WhenAll(sources.Select(i => serviceProvider.GetService<App>().Run(i)).ToArray());
 
             // Create a block with an asynchronous action
             var block = new ActionBlock<string>(
-                async x => await serviceProvider.GetService<App>().Run(x),
+                async x => await serviceProvider.GetService<App>().Run(x, restore),
                 new ExecutionDataflowBlockOptions
                 {
                     BoundedCapacity = int.Parse(configuration["Backup:BoundedCapacity"]), // Cap the item count
