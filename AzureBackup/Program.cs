@@ -93,6 +93,7 @@ namespace AzureBackup
 
             // Add services
             serviceCollection.AddTransient<IBackupService, BackupService>();
+            serviceCollection.AddTransient<IRestoreService, RestoreService>();
 
             // Add app
             serviceCollection.AddTransient<App>();
