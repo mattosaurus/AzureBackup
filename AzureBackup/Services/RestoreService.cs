@@ -2,10 +2,7 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.WindowsAzure.Storage.Blob;
 using System;
-using System.Collections.Generic;
 using System.IO;
-using System.Text;
-using System.Security.Cryptography;
 using System.Threading.Tasks;
 
 namespace AzureBackup.Services
@@ -110,13 +107,13 @@ namespace AzureBackup.Services
             }
             else if (File.GetLastWriteTimeUtc(path) < blockBlob.Properties.LastModified)
             {
-                if (!blockBlob.HashesAreEqual(path))
+                if (!blockBlob.ValidateMD5(path))
                 {
                     await blockBlob.DownloadToFileAsync(path, FileMode.Create);
                     _logger.LogDebug(@"item overwritten");
                 }
             }
-            if (!blockBlob.HashesAreEqual(path))
+            if (!blockBlob.ValidateMD5(path))
             {
                 _logger.LogCritical("Hashes are not equal! {@path}", path);
             }

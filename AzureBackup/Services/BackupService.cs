@@ -63,7 +63,7 @@ namespace AzureBackup.Services
                 _logger.LogDebug("File already exists");
                 // Only overwrite if local copy has been updated more recently
                 if (file.LastWriteTimeUtc > blockBlob.Properties.LastModified
-                    && !blockBlob.HashesAreEqual(file.FullName))
+                    && !blockBlob.ValidateMD5(file.FullName))
                 {
                     _logger.LogDebug("Uploading file");
                     // Overwrite the blob with contents from a local file.
@@ -73,7 +73,7 @@ namespace AzureBackup.Services
                     }
                     _logger.LogDebug("Finished file upload");
 
-                    if (!blockBlob.HashesAreEqual(file.FullName))
+                    if (!blockBlob.ValidateMD5(file.FullName))
                     {
                         _logger.LogCritical("Hashes are not equal! {@path}", file.FullName);
                     }
@@ -95,7 +95,7 @@ namespace AzureBackup.Services
                 }
                 _logger.LogDebug("Finished file upload");
 
-                if (!blockBlob.HashesAreEqual(file.FullName))
+                if (!blockBlob.ValidateMD5(file.FullName))
                 {
                     _logger.LogCritical("Hashes are not equal! {@path}", file.FullName);
                 }

@@ -7,7 +7,7 @@ namespace AzureBackup.Extensions
 {
     public static class CloudBlockBlobExtensions
     {
-        public static bool HashesAreEqual(this CloudBlockBlob blob, string filePath)
+        public static bool ValidateMD5(this CloudBlockBlob blob, string filePath)
         {
             return blob.Properties.ContentMD5.Equals(CalculateMD5(filePath));
         }
