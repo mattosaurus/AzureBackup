@@ -3,20 +3,20 @@ using Microsoft.Extensions.Logging;
 using Microsoft.WindowsAzure.Storage;
 using Microsoft.WindowsAzure.Storage.Blob;
 using System;
-using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Text;
 using System.Threading.Tasks;
 
 namespace AzureBackup.Services
 {
+    using AzureBackup.Extensions;
+
     public interface IBackupService
     {
         Task Run(string source);
     }
 
-    class BackupService : IBackupService
+    internal class BackupService : IBackupService
     {
         private readonly ILogger<BackupService> _logger;
         private readonly IConfigurationRoot _config;
@@ -29,20 +29,32 @@ namespace AzureBackup.Services
 
         public async Task BackupFile(DirectoryInfo directory, FileInfo file)
         {
+            if (directory == null)
+            {
+                throw new ArgumentNullException(nameof(directory));
+            }
+
+            if (file == null)
+            {
+                throw new ArgumentNullException(nameof(file));
+            }
+
             _logger.LogDebug("Starting to process file {@SourceFilePath}", file.FullName);
             // Retrieve a reference to a container.
             CloudBlobContainer container = new CloudBlobContainer(new Uri(_config["Azure:ContainerConnectionString"]));
 
             // Upload files
             string blobPath = file.FullName.Replace(directory.FullName, "");
-            blobPath = directory.Name + "\\" + blobPath;
+            blobPath = Path.Combine(directory.Name, blobPath);
 
             // Retrieve reference to a blob
             CloudBlockBlob blockBlob = container.GetBlockBlobReference(blobPath);
 
-            BlobRequestOptions blockBlobOptions = new BlobRequestOptions();
-            blockBlobOptions.ParallelOperationThreadCount = int.Parse(_config["Azure:BlobUpload:ParallelOperationThreadCount"].ToString());
-            blockBlobOptions.SingleBlobUploadThresholdInBytes = long.Parse(_config["Azure:BlobUpload:SingleBlobUploadThresholdInBytes"].ToString());
+            BlobRequestOptions blockBlobOptions = new BlobRequestOptions
+            {
+                ParallelOperationThreadCount = int.Parse(_config["Azure:BlobUpload:ParallelOperationThreadCount"].ToString()),
+                SingleBlobUploadThresholdInBytes = long.Parse(_config["Azure:BlobUpload:SingleBlobUploadThresholdInBytes"].ToString())
+            };
 
             _logger.LogDebug("Checking if file already exists in storage account");
             // Only upload if updated or doesn't already exist
@@ -50,7 +62,8 @@ namespace AzureBackup.Services
             {
                 _logger.LogDebug("File already exists");
                 // Only overwrite if local copy has been updated more recently
-                if (file.LastWriteTimeUtc > blockBlob.Properties.LastModified)
+                if (file.LastWriteTimeUtc > blockBlob.Properties.LastModified
+                    && !blockBlob.ValidateMD5(file.FullName))
                 {
                     _logger.LogDebug("Uploading file");
                     // Overwrite the blob with contents from a local file.
@@ -59,6 +72,11 @@ namespace AzureBackup.Services
                         await blockBlob.UploadFromStreamAsync(fileStream, null, blockBlobOptions, new OperationContext());
                     }
                     _logger.LogDebug("Finished file upload");
+
+                    if (!blockBlob.ValidateMD5(file.FullName))
+                    {
+                        _logger.LogCritical("Hashes are not equal! {@path}", file.FullName);
+                    }
                 }
                 else
                 {
@@ -76,15 +94,20 @@ namespace AzureBackup.Services
                     await blockBlob.UploadFromStreamAsync(fileStream, null, blockBlobOptions, new OperationContext());
                 }
                 _logger.LogDebug("Finished file upload");
+
+                if (!blockBlob.ValidateMD5(file.FullName))
+                {
+                    _logger.LogCritical("Hashes are not equal! {@path}", file.FullName);
+                }
             }
         }
 
         public async Task Run(string source)
         {
             _logger.LogDebug("Checking source directory {@SourceDirectory} exists", source);
-            if (!source.EndsWith("\\"))
+            if (!source.EndsWith(Path.DirectorySeparatorChar))
             {
-                source += "\\";
+                source += Path.DirectorySeparatorChar;
             }
 
             // Check directory exists
@@ -93,18 +116,17 @@ namespace AzureBackup.Services
                 throw new ArgumentException("Specified directory doesn't exist.");
             }
 
-            DirectoryInfo directory = new DirectoryInfo(source);
-
             _logger.LogDebug("Listing all files in source");
-            string[] filePaths = Directory.GetFiles(source, "*", SearchOption.AllDirectories);
+            var fileNames = from dir in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories)
+                            select dir;
 
-            List<FileInfo> files = filePaths.Select(x => new FileInfo(x)).ToList();
+            var dirInfo = new DirectoryInfo(source);
 
-            foreach (FileInfo file in files)
+            foreach (var fileName in fileNames)
             {
                 try
                 {
-                    await BackupFile(directory, file);
+                    await BackupFile(dirInfo, new FileInfo(fileName));
                 }
                 catch (Exception ex)
                 {
