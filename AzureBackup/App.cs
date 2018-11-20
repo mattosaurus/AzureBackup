@@ -10,12 +10,14 @@ namespace AzureBackup
     public class App
     {
         private readonly IBackupService _backupService;
+        private readonly IRestoreService _restoreService;
         private readonly ILogger<App> _logger;
         private readonly IConfigurationRoot _config;
 
-        public App(IBackupService backupService, IConfigurationRoot config, ILogger<App> logger)
+        public App(IBackupService backupService, IRestoreService restoreService, IConfigurationRoot config, ILogger<App> logger)
         {
             _backupService = backupService;
+            _restoreService = restoreService;
             _logger = logger;
             _config = config;
         }
@@ -27,7 +29,14 @@ namespace AzureBackup
             // Push ID to log
             using (LogContext.PushProperty("LogKey", logKey))
             {
-                await _backupService.Run(source, restore);
+                if (restore)
+                {
+                    await _restoreService.Run(source);
+                }
+                else
+                {
+                    await _backupService.Run(source);
+                }
             }
 
             _logger.LogInformation("Ending Service for {@BackupFile} with LogKey {@ID}", source, logKey);

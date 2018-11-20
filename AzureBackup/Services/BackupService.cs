@@ -5,14 +5,15 @@ using Microsoft.WindowsAzure.Storage.Blob;
 using System;
 using System.IO;
 using System.Linq;
-using System.Security.Cryptography;
 using System.Threading.Tasks;
 
 namespace AzureBackup.Services
 {
+    using AzureBackup.Extensions;
+
     public interface IBackupService
     {
-        Task Run(string source, bool restore = false);
+        Task Run(string source);
     }
 
     internal class BackupService : IBackupService
@@ -28,6 +29,16 @@ namespace AzureBackup.Services
 
         public async Task BackupFile(DirectoryInfo directory, FileInfo file)
         {
+            if (directory == null)
+            {
+                throw new ArgumentNullException(nameof(directory));
+            }
+
+            if (file == null)
+            {
+                throw new ArgumentNullException(nameof(file));
+            }
+
             _logger.LogDebug("Starting to process file {@SourceFilePath}", file.FullName);
             // Retrieve a reference to a container.
             CloudBlobContainer container = new CloudBlobContainer(new Uri(_config["Azure:ContainerConnectionString"]));
@@ -51,7 +62,8 @@ namespace AzureBackup.Services
             {
                 _logger.LogDebug("File already exists");
                 // Only overwrite if local copy has been updated more recently
-                if (file.LastWriteTimeUtc > blockBlob.Properties.LastModified)
+                if (file.LastWriteTimeUtc > blockBlob.Properties.LastModified
+                    && !blockBlob.ValidateMD5(file.FullName))
                 {
                     _logger.LogDebug("Uploading file");
                     // Overwrite the blob with contents from a local file.
@@ -61,9 +73,9 @@ namespace AzureBackup.Services
                     }
                     _logger.LogDebug("Finished file upload");
 
-                    if (!CheckHashes(blockBlob, file.FullName))
+                    if (!blockBlob.ValidateMD5(file.FullName))
                     {
-                        _logger.LogCritical("Hashes not unique! {@path}", file.FullName);
+                        _logger.LogCritical("Hashes are not equal! {@path}", file.FullName);
                     }
                 }
                 else
@@ -83,122 +95,14 @@ namespace AzureBackup.Services
                 }
                 _logger.LogDebug("Finished file upload");
 
-                if (!CheckHashes(blockBlob, file.FullName))
+                if (!blockBlob.ValidateMD5(file.FullName))
                 {
-                    _logger.LogCritical("Hashes not unique! {@path}", file.FullName);
+                    _logger.LogCritical("Hashes are not equal! {@path}", file.FullName);
                 }
             }
         }
 
-        private async Task RestoreFilesFromContainer(CloudBlobContainer container, string target)
-        {
-            BlobContinuationToken continuationToken = null;
-            do
-            {
-                var results = await container.ListBlobsSegmentedAsync(null, continuationToken);
-
-                // Get the value of the continuation token returned by the listing call.
-                continuationToken = results.ContinuationToken;
-
-                foreach (var result in results.Results)
-                {
-                    _logger.LogDebug("item url {@itemUri}", result.Uri);
-
-                    if (result is CloudBlobDirectory dir)
-                    {
-                        await RestoreFromDirectory(dir, target);
-                    }
-                    else if (result is CloudBlockBlob)
-                    {
-                        await RestoreFile(result, target);
-                    }
-                }
-            }
-            while (continuationToken != null); // Loop while the continuation token is not null.
-        }
-
-        private async Task RestoreFromDirectory(CloudBlobDirectory dir, string target)
-        {
-            if (dir == null)
-            {
-                throw new ArgumentNullException(nameof(dir));
-            }
-
-            BlobContinuationToken continuationToken = null;
-            do
-            {
-                // Get the value of the continuation token returned by the listing call.
-                var results = await dir.ListBlobsSegmentedAsync(continuationToken);
-
-                foreach (var result in results.Results)
-                {
-                    if (result is CloudBlobDirectory)
-                    {
-                        await RestoreFromDirectory(result as CloudBlobDirectory, target);
-                    }
-                    else if (result is CloudBlockBlob)
-                    {
-                        await RestoreFile(result, target);
-                    }
-                }
-            }
-            while (continuationToken != null); // Loop while the continuation token is not null.
-        }
-
-        private static string CreateHash(byte[] bytes)
-        {
-            using (var md5 = MD5.Create())
-            {
-                var md5Hash = md5.ComputeHash(bytes);
-                return Convert.ToBase64String(md5Hash);
-            }
-        }
-
-        private static bool CheckHashes(CloudBlockBlob blob, string path)
-        {
-            var contentMD5 = blob.Properties.ContentMD5;
-            var fileContentMD5 = CreateHash(File.ReadAllBytes(path));
-            return contentMD5 == fileContentMD5;
-        }
-
-        private async Task RestoreFile(IListBlobItem item, string target)
-        {
-            if (item == null || !(item is CloudBlockBlob blockBlob))
-            {
-                throw new ArgumentNullException(nameof(item));
-            }
-
-            _logger.LogDebug(blockBlob.Name);
-            _logger.LogDebug(blockBlob.Properties.LastModified.ToString());
-
-            var targetDirName = new DirectoryInfo(target).Name;
-            var fileName = blockBlob.Name.Replace('/', Path.DirectorySeparatorChar);
-            var path = Path.Combine(target, fileName)
-                .Replace(Path.Combine(targetDirName, targetDirName), targetDirName);
-
-            if (!File.Exists(path))
-            {
-                await blockBlob.DownloadToFileAsync(path, FileMode.CreateNew);
-                _logger.LogDebug(@"item created");
-            }
-            else if (File.GetLastWriteTimeUtc(path) < blockBlob.Properties.LastModified)
-            {
-                if (!CheckHashes(blockBlob, path))
-                {
-                    await blockBlob.DownloadToFileAsync(path, FileMode.Create);
-                    _logger.LogDebug(@"item overwritten");
-                }
-            }
-            if (!CheckHashes(blockBlob, path))
-            {
-                _logger.LogCritical("Hashes not unique! {@path}", path);
-            }
-
-            _logger.LogDebug("");
-            _logger.LogDebug(@"==========================");
-        }
-
-        public async Task Run(string source, bool restore = false)
+        public async Task Run(string source)
         {
             _logger.LogDebug("Checking source directory {@SourceDirectory} exists", source);
             if (!source.EndsWith(Path.DirectorySeparatorChar))
@@ -212,43 +116,22 @@ namespace AzureBackup.Services
                 throw new ArgumentException("Specified directory doesn't exist.");
             }
 
-            // backup
-            if (restore == false)
+            _logger.LogDebug("Listing all files in source");
+            var fileNames = from dir in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories)
+                            select dir;
+
+            var dirInfo = new DirectoryInfo(source);
+
+            foreach (var fileName in fileNames)
             {
-                _logger.LogDebug("Listing all files in source");
-                var fileNames = from dir in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories)
-                                select dir;
-
-                var dirInfo = new DirectoryInfo(source);
-
-                foreach (var fileName in fileNames)
+                try
                 {
-                    try
-                    {
-                        await BackupFile(dirInfo, new FileInfo(fileName));
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogError(ex, "Upload of file failed.");
-                    }
+                    await BackupFile(dirInfo, new FileInfo(fileName));
                 }
-
-                return;
-            }
-
-            // restore
-            _logger.LogDebug("Starting to process file restore to {@SourceFilePath}", source);
-
-            // Retrieve a reference to a container.
-            CloudBlobContainer container = new CloudBlobContainer(new Uri(_config["Azure:ContainerConnectionString"]));
-
-            try
-            {
-                await RestoreFilesFromContainer(container, source);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Download from container failed.");
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Upload of file failed.");
+                }
             }
         }
     }
